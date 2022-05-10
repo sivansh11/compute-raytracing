@@ -3,13 +3,55 @@
 layout(local_size_x = 8, local_size_y = 4, local_size_z = 1) in;
 layout(rgba32f, binding = 0) uniform image2D screen;
 
+
+//-----------------------------------------------------
+//----------------STRUCT-DEFINITIONS-------------------
+//-----------------------------------------------------
+struct sphere
+{
+    vec3 center;
+    float radius;
+};
+
+struct camera
+{
+    vec3 origin;
+    vec3 lower_left_corner;
+    vec3 horizontal;
+    vec3 vertical;
+};
+
+struct ray
+{
+    vec3 origin;
+    vec3 direction;
+};
+
+
+struct hit_record
+{
+    vec3 p;
+    vec3 normal;
+    float t;
+    bool front_face;
+};
+//-----------------------------------------------------
+//----------------UNIFORMS-----------------------------
+//-----------------------------------------------------
 uniform int WIDTH;
 uniform int HEIGHT;
-float aspect_ratio = float(WIDTH) / float(HEIGHT);
 
 uniform int samples_per_pixel;
 uniform int max_depth;
 
+uniform int num_spheres;
+uniform sphere spheres[20];
+
+float aspect_ratio = float(WIDTH) / float(HEIGHT);
+
+//-----------------------------------------------------
+//----------------RNG-CODE-----------------------------
+//-----------------------------------------------------
 // Used as initial seed to the PRNG.
 uint pcg_hash(uint seed)
 {
@@ -56,7 +98,15 @@ vec3 random_in_uint_sphere(inout uint seed)
         return p;
     }
 }
+vec3 random_unit_vector(inout uint seed)
+{
+    return normalize(random_in_uint_sphere(seed));
+}
 
+
+//-----------------------------------------------------
+//----------------UTILITY-FUNCTIONS--------------------
+//-----------------------------------------------------
 float clamp(float x, float min, float max)
 {
     if (x < min) return min;
@@ -64,33 +114,10 @@ float clamp(float x, float min, float max)
     return x;
 }
 
-struct sphere
-{
-    vec3 center;
-    float radius;
-};
-
-uniform int num_spheres;
-uniform sphere spheres[20];
-
-struct ray
-{
-    vec3 origin;
-    vec3 direction;
-};
-
 vec3 ray_at(in ray r, float t)
 {
     return r.origin + r.direction * t;
 }
-
-struct camera
-{
-    vec3 origin;
-    vec3 lower_left_corner;
-    vec3 horizontal;
-    vec3 vertical;
-};
 
 camera camera_init()
 {
@@ -109,21 +136,14 @@ camera camera_init()
 
 ray camera_get_ray(in camera c, float u, float v)
 {
-    return ray(c.origin, c.lower_left_corner + u*c.horizontal + v*c.vertical - c.origin);
+    ray r = ray(c.origin, c.lower_left_corner + u*c.horizontal + v*c.vertical - c.origin);
+    return r;
 }
 
 float length2(in vec3 vec)
 {
     return vec.x * vec.x + vec.y * vec.y + vec.z * vec.z;
 }
-
-struct hit_record
-{
-    vec3 p;
-    vec3 normal;
-    float t;
-    bool front_face;
-};
 
 void hit_record_set_face_normal(inout hit_record rec, in ray r, in vec3 outward_normal)
 {
@@ -137,7 +157,9 @@ void hit_record_set_face_normal(inout hit_record rec, in ray r, in vec3 outward_
         rec.normal = -outward_normal;
     }
 }
-
+//-----------------------------------------------------
+//----------------SPHERE-INTERSECTION------------------
+//-----------------------------------------------------
 bool sphere_hit(in ray r, in sphere s, float t_min, float t_max, inout hit_record rec)
 {
     vec3 oc = r.origin - s.center;
@@ -147,9 +169,7 @@ bool sphere_hit(in ray r, in sphere s, float t_min, float t_max, inout hit_recor
 
     float discriminant = (half_b * half_b) - (a*c);
     if (discriminant < 0) return false;
-
     float sqrt_dis = sqrt(discriminant);
-
     float root = (-half_b - sqrt_dis) / a;
     if (root < t_min || t_max < root)
     {
@@ -159,7 +179,6 @@ bool sphere_hit(in ray r, in sphere s, float t_min, float t_max, inout hit_recor
             return false;
         }
     }
-
     rec.t = root;
     rec.p = ray_at(r, root);
     vec3 outward_normal = (rec.p - s.center) / s.radius;
@@ -167,30 +186,11 @@ bool sphere_hit(in ray r, in sphere s, float t_min, float t_max, inout hit_recor
     return true;
 }
 
-// float hit_shpere(in vec3 center, float radius, in ray r)
-// {
-//     vec3 oc = r.origin - center;
-//     float a = length2(r.direction);
-//     float half_b = dot(oc, r.direction);
-//     float c = length2(oc) - (radius * radius);
-//     float discriminant = (half_b * half_b) - (a*c);
-    
-//     if (discriminant < 0)
-//     {
-//         return -1.0;
-//     }
-//     else
-//     {
-//         return (-half_b - sqrt(discriminant)) / (a);
-//     }
-// }
-
 bool hit(in ray r, float t_min, float t_max, inout hit_record rec)
 {
     hit_record temp_rec;
     bool hit_anything = false;
     float closest_so_far = t_max;
-
     for (int i=0; i<num_spheres; i++)
     {
         sphere s = spheres[i];
@@ -206,28 +206,9 @@ bool hit(in ray r, float t_min, float t_max, inout hit_record rec)
 
 vec3 ray_color(inout uint seed, in ray r, int depth)
 {
-    // float t = hit_shpere(vec3(0, 0, -1), 0.5, r);
-    // if (t > 0.0)
-    // {
-    //     vec3 nor = normalize(ray_at(r, t) - vec3(0, 0, -1));
-    //     return 0.5 * vec3(nor.x + 1, nor.y + 1, nor.z + 1);
-    // }
-
-    // if (depth <= 0)
-    // {
-    //     return vec3(0, 0, 0);
-    // }
-
-    // hit_record rec;
-    // if (hit(r, 0, 100000000, rec))
-    // {
-    //     vec3 target = rec.p + rec.normal + random_in_uint_sphere(seed);
-    //     return 0.5 * ray_color(seed, ray(rec.p, target - rec.p), depth - 1);
-    // }
-
+    const float EPSILON = 0.001;
     vec3 bcol = vec3(1);
     ray r_in = r;
-
     while (true)
     {
         if (depth <= 0) 
@@ -235,10 +216,13 @@ vec3 ray_color(inout uint seed, in ray r, int depth)
             return vec3(0, 0, 0);
         }
         hit_record rec;
-        if (hit(r_in, 0, 10000000, rec))
+        if (hit(r_in, 0.00000001, 10000000, rec))
         {
+            // vec3 target = rec.p + rec.normal + random_unit_vector(seed);
             vec3 target = rec.p + rec.normal + random_in_uint_sphere(seed);
             r_in = ray(rec.p, target - rec.p);
+            // r_in.origin = r_in.origin + r_in.direction * EPSILON;
+            r_in.origin += rec.normal * EPSILON;
             depth--;
             bcol *= 0.5;
         }
@@ -249,9 +233,7 @@ vec3 ray_color(inout uint seed, in ray r, int depth)
             bcol *= vec3(1 - t) + t * vec3(.5, .7, 1);
             return bcol;
         }
-
     }
-
     vec3 unit_dir = normalize(r.direction);
     float t = 0.5 * (unit_dir.y + 1); 
     return (1 - t) * vec3(1, 1, 1) + t * vec3(.5, .7, 1); 
@@ -265,7 +247,7 @@ void main()
     camera c = camera_init();
 
     ivec2 dims = imageSize(screen);
-    float u = pixel_coords.x / (dims.x);
+    float u = pixel_coords.x / (dims.x);  
     float v = pixel_coords.y / (dims.y);
 
     uint pixel_index = uint(pixel_coords.x + pixel_coords.y * WIDTH);
@@ -280,14 +262,15 @@ void main()
         pix_col += ray_color(seed, r, max_depth);
     }
     
-    pix_col = pix_col / samples_per_pixel;
+    float scale = 1.0 / samples_per_pixel;
+    pix_col.x = sqrt(pix_col.x * scale);
+    pix_col.y = sqrt(pix_col.y * scale);
+    pix_col.z = sqrt(pix_col.z * scale);
+
     pix_col.x = clamp(pix_col.x, 0, 1);
     pix_col.y = clamp(pix_col.y, 0, 1);
     pix_col.z = clamp(pix_col.z, 0, 1);
     pixel = vec4(pix_col, 1);
-    
-    // float r = rand(seed);
-    // pixel = vec4(r, r, r, 1);
 
     imageStore(screen, ivec2(pixel_coords), pixel);
 }
